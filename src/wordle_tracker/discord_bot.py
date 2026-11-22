@@ -4,9 +4,10 @@ from datetime import date, datetime
 from time import time
 from os import environ
 
-from discord import Client, Guild, Intents, Forbidden, Interaction, Member, Message, RawMessageUpdateEvent, TextChannel
-from discord.interactions import Interaction
-from discord import app_commands
+from discord import Guild, Intents, Forbidden, Member, Message, RawMessageUpdateEvent, TextChannel
+from discord.ext.commands import Context, is_owner, when_mentioned_or
+from discord.ext.commands.bot import Bot
+from discord.app_commands import describe
 from loguru import logger
 from httpx import AsyncClient
 from dateutil.relativedelta import relativedelta
@@ -22,11 +23,12 @@ MAIN_CHANNEL_ID = 803987404733808662
 TEST_CHANNEL_ID = 512363920044982274
 WORDLE_BOT_ID = 1211781489931452447
 
-USER_TEMPLATE_PATTERN = re.compile(r"\[user\:(\d+)\]")
+USER_TEMPLATE_PATTERN = re.compile(r"(\[user\:(\d+)\])")
 
-class DiscordClient(Client):
+class DiscordClient(Bot):
     def __init__(self, database_client: DatabaseClient, environment: Environment):
         super().__init__(
+            command_prefix=when_mentioned_or("!"),
             intents=Intents(
                 members=True,
                 guilds=True,
@@ -71,6 +73,8 @@ class DiscordClient(Client):
 
         self.guild = self.get_guild(self.guild_id)
         self.channel = self.guild.get_channel(self.channel_id)
+
+        await self.tree.sync()
 
         try:
             await self.sync_messages()
@@ -125,6 +129,18 @@ class DiscordClient(Client):
 
         return (json_data["solution"], json_data["days_since_launch"])
 
+    async def _get_or_create_day_entry(self, date_to_create: date, cursor: DatabaseCursor):
+        day_model = cursor.get_day_entry(date_to_create)
+        
+        if day_model is None:
+            word, day = await self._get_word_info(date_to_create)
+
+            day_model = Day(word=word, day=day, date=date_to_create)
+            cursor.session.add(day_model)
+            cursor.session.flush()
+
+        return day_model
+
     async def _save_scores(
         self,
         message: Message,
@@ -134,16 +150,9 @@ class DiscordClient(Client):
     ):
         score_models = []
         for disc_id, score in scores:
-            date = message.created_at if live else message.created_at + relativedelta(days=-1)
-            date = date.date()
-            day_model = cursor.get_day_entry(date)
-
-            if day_model is None:
-                word, day = await self._get_word_info(date)
-
-                day_model = Day(word=word, day=day, date=date)
-                cursor.session.add(day_model)
-                cursor.session.flush()
+            message_date = message.created_at if live else message.created_at + relativedelta(days=-1)
+            message_date = message_date.date()
+            day_model = await self._get_or_create_day_entry(message_date, cursor)
 
             score_model = day_model.get_score_entry(disc_id)
 
@@ -216,28 +225,30 @@ class DiscordClient(Client):
         self.latest_id = message.id
 
     async def on_message(self, message: Message):
-        if message.author.id != WORDLE_BOT_ID or message.channel.guild != self.guild:
+        if message.channel.guild != self.guild:
             return
 
-        if not self._is_valid_wordle_message(message):
+        if self._is_valid_wordle_message(message):
+            logger.info("Message from Wordle bot")
+            score_entries = await self._handle_wordle_message(message)
+            if score_entries == []:
+                return
+
+            live = not message.content.startswith("**Your group")
+
+            with self.database_client as cursor:
+                await self._save_scores(message, score_entries, cursor, live)
+                await self._on_sync_complete(message)
+
             return
 
-        score_entries = await self._handle_wordle_message(message)
-        if score_entries == []:
-            return
-
-        live = not message.content.startswith("**Your group")
-
-        with self.database_client as cursor:
-            await self._save_scores(message, score_entries, cursor, live)
-            await self._on_sync_complete(message)
+        await self.process_commands(message)
 
     async def on_message_edit(self, message_before: Message | None, message_after: Message):
         logger.info("Message was edited!")
-        if message_after.author.id != WORDLE_BOT_ID:
-            return
 
-        await self._handle_wordle_message(message_after, True)
+        if self._is_valid_wordle_message(message_after):
+            await self._handle_wordle_message(message_after)
 
     async def on_raw_message_edit(self, payload: RawMessageUpdateEvent):
         if payload.cached_message is not None:
@@ -286,28 +297,59 @@ class DiscordClient(Client):
         members = {member.id: member for member in self._get_members()}
 
         for full, disc_id in re.findall(USER_TEMPLATE_PATTERN, message):
-            member = members.get(disc_id)
+            member = members.get(int(disc_id))
             name = member.display_name if member is not None else "Unknown"
             message = message.replace(full, name)
 
         return message
 
-    @app_commands.command(description="Show a summary of your Wordle performance.")
-    async def summary(self, interaction: Interaction, member: Member):
-        response_msg = messages.get_player_summary_msg(self.database_client, member.id)
-        await interaction.response.send_message(self._replace_user_ids(response_msg))
+def init_commands(client: DiscordClient):
+    @client.hybrid_command(description="Show a summary of your Wordle performance.")
+    @describe(member="The user to show the summary for.")
+    async def summary(context: Context, member: Member):
+        response_msg = messages.get_player_summary_msg(client.database_client, member.id)
+        await context.send(client._replace_user_ids(response_msg))
 
-    @app_commands.command(description="Show a general overview of Wordle stats in the server.")
-    async def status(self, interaction: Interaction):
-        response_msg = messages.get_status_msg(self.database_client)
-        await interaction.response.send_message(response_msg)
+    @client.hybrid_command(description="Show a general overview of Wordle stats in the server.")
+    async def overview(context: Context):
+        response_msg = messages.get_status_msg(client.database_client)
+        await context.send(response_msg)
 
-    @app_commands.command(description="Show the ranking of players by average Wordle score.")
-    async def ranking(self, interaction: Interaction):
-        response_msg = messages.get_ranking_msg(self.database_client)
-        await interaction.response.send_message(self._replace_user_ids(response_msg))
+    @client.hybrid_command(description="Show the ranking of players by average Wordle score.")
+    async def ranking(context: Context):
+        response_msg = messages.get_ranking_msg(client.database_client)
+        await context.send(client._replace_user_ids(response_msg))
 
-    @app_commands.command(description="Show information about a word on a given date, fx. '2026-11-11'")
-    async def word(self, interaction: Interaction, date: str):
-        response_msg = messages.get_word_msg(self.database_client, date)
-        await interaction.response.send_message(self._replace_user_ids(response_msg))
+    @client.hybrid_command(description="Show information about a word on a given date.")
+    @describe(word_date="The date to search for, fx. '2026-11-11'")
+    async def word(context: Context, word_date: str):
+        try:
+            parsed_date = date(*tuple(map(int, word_date.split("-"))))
+        except ValueError:
+            await context.send("Invalid date. Should be in the format *YYYY-MM-DD*")
+            return
+
+        if date.today() == parsed_date:
+            await context.send("You can't view today's word, that would be cheating!!!")
+            return
+
+        response_msg = messages.get_word_msg(client.database_client, parsed_date)
+        await context.send(client._replace_user_ids(response_msg))
+
+    @client.hybrid_command(description="Report today's Wordle word as giga fake.")
+    async def fake(context: Context):
+        username = context.interaction.user.display_name
+
+        today = date.today()
+
+        with client.database_client as cursor:
+            await client._get_or_create_day_entry(today, cursor)
+            times_reported = cursor.mark_word_fake(today, context.interaction.user.id)
+
+        times = "time" if times_reported == 1 else "times"
+        response = (
+            f"{username} marked today's word as fake!\n"
+            f"Today's word has been marked fake **{times_reported}** {times}."
+        )
+
+        await context.send(response)

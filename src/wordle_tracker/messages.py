@@ -13,7 +13,7 @@ def get_player_summary_msg(database: DatabaseClient, disc_id: int):
         score_distribution = {
             score: count
             for score, count in cursor.get_player_score_distribution(disc_id)
-            if score not in (None, 7)
+            if score not in (8, 7)
         }
         for num in range(1, 7):
             if num not in score_distribution:
@@ -35,7 +35,7 @@ def get_player_summary_msg(database: DatabaseClient, disc_id: int):
         )
 
         for score, count in score_distribution:
-            message += f"\n- {score}: {count} times"
+            message += f"\n- **{score}**: {count} times"
 
     return message
 
@@ -48,26 +48,24 @@ def get_status_msg(database: DatabaseClient):
 
         return (
             f"Since **{first_date.strftime('%Y-%m-%d')}** we have played Wordle **{days_tracked}** times\n"
-            f"Our lowest average scores was **{best_score}** on {best_day.strftime('%Y-%m-%d')} with the word **{best_word.upper()}**\n"
-            f"Our highest average scores was **{worst_score}** on {worst_day.strftime('%Y-%m-%d')} with the word **{worst_word.upper()}**"
+            f"Our lowest average scores was **{best_score}** on {best_day} with the word **{best_word.upper()}**\n"
+            f"Our highest average scores was **{worst_score}** on {worst_day} with the word **{worst_word.upper()}**"
         )
 
 def get_ranking_msg(database: DatabaseClient):
     message = "Rankings for Wordle:"
 
+    rank_emojis = ["🥇", "🥈", "🥉", "🫠", "💩"]
+
     with database as cursor:
         rankings = cursor.get_ranking()
         for disc_id, rank, score in rankings:
-            message += f"\n{rank}: **[user:{disc_id}]** (avg. score: {score:.2f})"
+            emoji = rank_emojis[rank - 1] if rank - 1 < len(rank_emojis) else f"{rank}"
+            message += f"\n{emoji}: **[user:{disc_id}]** (avg. score: {score:.2f})"
 
     return message
 
-def get_word_msg(database: DatabaseClient, date_str: str):
-    try:
-        parsed_date = date(*tuple(map(int, date_str.split("-"))))
-    except ValueError:
-        return "Invalid date. Should be in the format *YYYY-MM-DD*"
-
+def get_word_msg(database: DatabaseClient, parsed_date: date):
     with database as cursor:
         result = cursor.get_word_info(parsed_date)
         if result is None or result[0] is None:

@@ -6,7 +6,7 @@ from loguru import logger
 
 from wordle_tracker.models import Environment
 from wordle_tracker.database import DatabaseClient
-from wordle_tracker.discord_bot import DiscordClient
+from wordle_tracker.discord_bot import DiscordClient, init_commands
 
 def main():
     load_dotenv()
@@ -25,6 +25,9 @@ def main():
     # Create and start Discord client
     logger.info("Starting Discord client...")
     discord_client = DiscordClient(database_client, environment)
+
+    # Initialize slash commands
+    init_commands(discord_client)
 
     discord_client.run(environ["DISCORD_TOKEN"])
 

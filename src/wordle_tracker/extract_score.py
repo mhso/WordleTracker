@@ -130,7 +130,7 @@ def determine_player_boxes(image: MatLike, avatar_images:  list[tuple[int, MatLi
                 x2 = x1 + w
                 y2 = y1 + h
 
-                coords = (x1, y1, x2, y2, start_x, start_y)
+                coords = (start_x, start_y)
 
                 if disc_id is None:
                     missing_coords.append(coords)
@@ -139,28 +139,13 @@ def determine_player_boxes(image: MatLike, avatar_images:  list[tuple[int, MatLi
 
                 break
 
-    if len(missing_coords) > 1:
-        raise ValueError("ERROR! More than one disc_id is missing!")
-    elif missing_coords: # Mads' avatar is the only one that was missing in the past
-        if 331082926475182081 in set(t[0] for t in start_coords):
-            start_coords.append((172757468814770176, missing_coords[0]))
-        else:
-            start_coords.append((331082926475182081, missing_coords[0]))
-
-    # for disc_id, box in player_boxes:
-    #     x1, x2 = box[0], box[0] + box[2]
-    #     y1, y2 = box[1], box[1] + box[3]
-
-    #     cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 2)
-    #     cv2.imwrite(f"bleh_{disc_id}.png", image)
-
     return start_coords
 
 def extract_wordle_scores(image: str | MatLike | bytes, user_avatars: list[tuple[int, str | None]]):
     """
     Extract Wordle scores from the given image with the given reference user avatars.
     For each entry, the score is:
-      - None if the player is not finished
+      - 8 if the player is not finished
       - 7 if the player didn't guess the word
       - The number of guesses, otherwise
     """
@@ -171,9 +156,6 @@ def extract_wordle_scores(image: str | MatLike | bytes, user_avatars: list[tuple
         arr = np.frombuffer(image, np.uint8)
         image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-    if DEBUG:
-        cv2.imwrite("image.png", image)
-
     avatar_images = [
         (disc_id, cv2.imread(path, cv2.IMREAD_COLOR))
         for disc_id, path in user_avatars
@@ -182,12 +164,7 @@ def extract_wordle_scores(image: str | MatLike | bytes, user_avatars: list[tuple
     start_coords = determine_player_boxes(image, avatar_images)
 
     scores = []
-    for disc_id, (x1, y1, x2, y2, start_x, y) in start_coords:
-        if DEBUG:
-            copy = image.copy()
-            cv2.circle(copy, (start_x, y), 5, (0, 0, 255), 2)
-            cv2.imwrite("start.png", copy)
-
+    for disc_id, (start_x, y) in start_coords:
         colors = []
 
         row = 0
@@ -211,7 +188,7 @@ def extract_wordle_scores(image: str | MatLike | bytes, user_avatars: list[tuple
                 break
 
             if all(within_range(color, BLACK) for color in row):
-                score = None
+                score = 8
                 break
 
         scores.append((disc_id, score))

@@ -69,7 +69,7 @@ class DatabaseCursor:
         return self.session.execute(stmt).scalar_one_or_none()
 
     def get_times_unfinished(self, disc_id: int):
-        return self._get_specfic_score(disc_id, None)
+        return self._get_specfic_score(disc_id, 8)
 
     def get_times_lost(self, disc_id: int):
         return self._get_specfic_score(disc_id, 7)
@@ -149,6 +149,14 @@ class DatabaseCursor:
 
     def get_highest_average_score(self):
         return self._get_most_extreme_score(True)
+
+    def mark_word_fake(self, date_to_mark: date, reported_by: int):
+        day = self.get_day_entry(date_to_mark)
+        self.session.add(FakeWord(day_id=day.id, reported_by=reported_by))
+        self.session.flush()
+
+        stmt = select(count("*")).select_from(FakeWord).where(FakeWord.day_id == day.id)
+        return self.session.execute(stmt).scalar_one_or_none()
 
 class DatabaseClient:
     def __init__(self, autocommit: bool = True):
