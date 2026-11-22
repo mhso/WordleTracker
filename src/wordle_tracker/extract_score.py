@@ -90,15 +90,10 @@ def determine_player_boxes(image: MatLike, avatar_images:  list[tuple[int, MatLi
     contours = [(i, c, cv2.contourArea(c)) for i, c in raw_contours]
     contours.sort(key=lambda t: t[2], reverse=True)
 
-    box_contours = [contours[0]]
-    prev_area = contours[0][2]
-    for i, contour, area in contours[1:]:
-        if prev_area - area > 500:
-            break
-
-        box_contours.append((i, contour, area))
-
-        prev_area = area
+    box_contours = []
+    for index, contour, area in contours:
+        if hierarchy[0][index][3] == -1 and area > 1000:
+            box_contours.append((index, contour))
 
     start_index = len(box_contours) * 3
     avatar_contours = contours[start_index:start_index + len(box_contours)]
@@ -110,45 +105,63 @@ def determine_player_boxes(image: MatLike, avatar_images:  list[tuple[int, MatLi
         for disc_id, avatar in avatar_images
     ]
 
-    player_boxes = []
-    missing_disc_ids = []
-    for i, contour, _ in box_contours:
+    start_coords = []
+    missing_coords = []
+    for i, contour in box_contours:
         for j, other_contour, _ in avatar_contours:
             if is_contained(hierarchy[0], j, i):
-                box = cv2.boundingRect(other_contour)
-                roi = image[box[1]: box[1] + box[3], box[0]: box[0] + box[2], :]
+                avatar_bbox = cv2.boundingRect(other_contour)
+                x1, y1, w, h = avatar_bbox
+                x2 = x1 + w
+                y2 = y1 + h
+
+                roi = image[y1: y2, x1: x2, :]
+
+                if len(box_contours) == 1:
+                    start_x = x2 + 30
+                    start_y = y1
+                else:
+                    start_x = x1 + 5
+                    start_y = y2 + 20
 
                 disc_id = match_avatar(descriptors, roi)
-                bbox = cv2.boundingRect(contour)
+                player_bbox = cv2.boundingRect(contour)
+                x1, y1, w, h = player_bbox
+                x2 = x1 + w
+                y2 = y1 + h
+
+                coords = (x1, y1, x2, y2, start_x, start_y)
 
                 if disc_id is None:
-                    missing_disc_ids.append(bbox)
+                    missing_coords.append(coords)
                 else:
-                    player_boxes.append((disc_id, cv2.boundingRect(contour)))
+                    start_coords.append((disc_id, coords))
 
                 break
 
-    if len(missing_disc_ids) > 1:
+    if len(missing_coords) > 1:
         raise ValueError("ERROR! More than one disc_id is missing!")
-    elif missing_disc_ids: # Mads' avatar is the only one that was missing in the past
-        player_boxes.append((331082926475182081, missing_disc_ids[0]))
+    elif missing_coords: # Mads' avatar is the only one that was missing in the past
+        if 331082926475182081 in set(t[0] for t in start_coords):
+            start_coords.append((172757468814770176, missing_coords[0]))
+        else:
+            start_coords.append((331082926475182081, missing_coords[0]))
 
     # for disc_id, box in player_boxes:
     #     x1, x2 = box[0], box[0] + box[2]
     #     y1, y2 = box[1], box[1] + box[3]
 
     #     cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 2)
-    #     cv2.imshow("Test", image)
-    #     cv2.waitKey(0)
+    #     cv2.imwrite(f"bleh_{disc_id}.png", image)
 
-    return player_boxes
+    return start_coords
 
 def extract_wordle_scores(image: str | MatLike | bytes, user_avatars: list[tuple[int, str | None]]):
     """
     Extract Wordle scores from the given image with the given reference user avatars.
     For each entry, the score is:
       - None if the player is not finished
-      - -1 if the player didn't guess the word
+      - 7 if the player didn't guess the word
       - The number of guesses, otherwise
     """
     if isinstance(image, str):
@@ -166,28 +179,12 @@ def extract_wordle_scores(image: str | MatLike | bytes, user_avatars: list[tuple
         for disc_id, path in user_avatars
         if path
     ]
-    player_boxes = determine_player_boxes(image, avatar_images)
+    start_coords = determine_player_boxes(image, avatar_images)
 
     scores = []
-    for disc_id, bbox in player_boxes:
-        if len(player_boxes) == 1:
-            y1 = bbox[1] + 10
-            y2 = bbox[1] + bbox[3] - 10
-            x1 = bbox[0] + (bbox[2] // 2)
-            x2 = bbox[0] + bbox[2] - 10
-            start_x, y = (20, 20)
-        else:
-            y1 = int(bbox[1] + bbox[3] * 0.5)
-            y2 = bbox[1] + bbox[3] - 10
-            x1 = bbox[0] + 10
-            x2 = bbox[0] + bbox[2] - 10
-            start_x, y = (10, 5)
-
-        roi = image[y1:y2, x1:x2, :]
-
+    for disc_id, (x1, y1, x2, y2, start_x, y) in start_coords:
         if DEBUG:
-            cv2.imwrite("image.png", image)
-            copy = roi.copy()
+            copy = image.copy()
             cv2.circle(copy, (start_x, y), 5, (0, 0, 255), 2)
             cv2.imwrite("start.png", copy)
 
@@ -199,15 +196,15 @@ def extract_wordle_scores(image: str | MatLike | bytes, user_avatars: list[tuple
             col = 0
             x = start_x
             while col < 5:
-                row_colors.append(roi[y, x])
-                x = find_next_square(roi, x, y, True)
+                row_colors.append(image[y, x])
+                x = find_next_square(image, x, y, True)
                 col += 1
 
             colors.append(row_colors)
-            y = find_next_square(roi, start_x, y, False)
+            y = find_next_square(image, start_x, y, False)
             row += 1
 
-        score = -1
+        score = 7
         for index, row in enumerate(colors):
             if all(within_range(color, GREEN) for color in row):
                 score = index + 1

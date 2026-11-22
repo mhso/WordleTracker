@@ -12,3 +12,4 @@ wheels/
 .env
 test_data
 *.png
+resources/database

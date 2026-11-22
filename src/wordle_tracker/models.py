@@ -39,3 +39,11 @@ class Score(Base):
     date_finished: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     day = relationship("Day", back_populates="scores")
+
+class FakeWord(Base):
+    __tablename__ = "fake_words"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: str(uuid4()))
+    day_id: Mapped[str] = mapped_column(String(64), ForeignKey("days.id", ondelete="CASCADE"))
+    reported_by: Mapped[int] = mapped_column(Integer)
+    load_time: Mapped[Optional[datetime]] = mapped_column(DateTime, default=lambda: datetime.now())

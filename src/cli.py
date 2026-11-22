@@ -2,7 +2,12 @@ from argparse import ArgumentParser
 from asyncio import iscoroutinefunction
 import asyncio
 
+from wordle_tracker.database import DatabaseClient
 from wordle_tracker.extract_score import extract_wordle_scores
+from wordle_tracker import messages
+
+from dotenv import load_dotenv
+
 
 class ScriptRunner:
     def extract_score(self, test_image: str):
@@ -17,7 +22,16 @@ class ScriptRunner:
         scores = extract_wordle_scores(f"../test_data/{test_image}.png", avatars)
         print(scores)
 
+    def cursor_func(self, func: str, *args):
+        with DatabaseClient(False) as cursor:
+            print(getattr(cursor, func)(*args))
+
+    def discord_messages(self, func: str, *args):
+        print(getattr(messages, func)(DatabaseClient(False), *args))
+
 if __name__ == "__main__":
+    load_dotenv()
+
     PARSER = ArgumentParser()
 
     TEST_RUNNER = ScriptRunner()

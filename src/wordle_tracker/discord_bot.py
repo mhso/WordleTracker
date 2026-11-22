@@ -189,23 +189,23 @@ class DiscordClient(Client):
 
         return [self._find_user(name) for name in player_names]
 
-    async def _handle_wordle_message(self, message: Message, live: bool):
+    async def _handle_wordle_message(self, message: Message):
         """
         Handle a message from the official Discord Wordle bot.
         """
-        if message.channel.id != self.channel.id or message.author.id != WORDLE_BOT_ID:
-            return []
-
-        if message.attachments == [] or not message.attachments[0].content_type.startswith("image/"):
-            return []
-
-        if not live and not message.content.startswith("**Your group"):
-            return []
-
         user_avatars = [(member.id, await self.get_avatar(member.id)) for member in self._get_members()]
 
         image_bytes = await message.attachments[0].read()
         return extract_wordle_scores(image_bytes, user_avatars)
+
+    def _is_valid_wordle_message(self, message: Message):
+        if message.channel.id != self.channel.id or message.author.id != WORDLE_BOT_ID:
+            return False
+
+        if message.attachments == [] or not message.attachments[0].content_type.startswith("image/"):
+            return False
+
+        return True
 
     async def _on_sync_complete(self, message: Message):
         self.latest_timestamp = message.created_at
@@ -215,12 +215,17 @@ class DiscordClient(Client):
         if message.author.id != WORDLE_BOT_ID or message.channel.guild != self.guild:
             return
 
-        score_entries = await self._handle_wordle_message(message, True)
+        if not self._is_valid_wordle_message(message):
+            return
+
+        score_entries = await self._handle_wordle_message(message)
         if score_entries == []:
             return
 
+        live = not message.content.startswith("**Your group")
+
         with self.database_client as cursor:
-            await self._save_scores(message, score_entries, cursor, True)
+            await self._save_scores(message, score_entries, cursor, live)
             await self._on_sync_complete(message)
 
     async def on_message_edit(self, message_before: Message | None, message_after: Message):
@@ -244,16 +249,18 @@ class DiscordClient(Client):
             latest_message = None
             with self.database_client as cursor:
                 async for message in self.channel.history(limit=None, after=self.latest_timestamp, oldest_first=True):
-                    if message.id == self.latest_id:
+                    if message.id == self.latest_id or not self._is_valid_wordle_message(message):
                         continue
 
-                    scores = await self._handle_wordle_message(message, False)
+                    live = not message.content.startswith("**Your group")
+
+                    scores = await self._handle_wordle_message(message)
                     if scores == []:
                         continue
 
                     await asyncio.sleep(1)
 
-                    score_models = await self._save_scores(message, scores, cursor, False)
+                    score_models = await self._save_scores(message, scores, cursor, live)
                     num_entries += len(score_models)
 
                     yesterday = message.created_at + relativedelta(days=-1)
