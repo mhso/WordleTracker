@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import date, datetime
 from time import time
 from os import environ
@@ -12,6 +13,7 @@ from dateutil.relativedelta import relativedelta
 
 from wordle_tracker.database import DatabaseClient, DatabaseCursor
 from wordle_tracker.models import Environment, Day, Score
+from wordle_tracker import messages
 from wordle_tracker.extract_score import extract_wordle_scores
 
 CORE_GUILD_ID = 803987403932172359
@@ -19,6 +21,8 @@ MY_GUILD_ID = 512363920044982272
 MAIN_CHANNEL_ID = 803987404733808662
 TEST_CHANNEL_ID = 512363920044982274
 WORDLE_BOT_ID = 1211781489931452447
+
+USER_TEMPLATE_PATTERN = re.compile(r"\[user\:(\d+)\]")
 
 class DiscordClient(Client):
     def __init__(self, database_client: DatabaseClient, environment: Environment):
@@ -278,6 +282,32 @@ class DiscordClient(Client):
         except Forbidden:
             logger.exception("Insufficient permissions to read Discord messages!")
 
-    # @app_commands.command(description="")
-    # async def summary(self, interaction: Interaction, member: Member):
-    #     pass
+    def _replace_user_ids(self, message: str):
+        members = {member.id: member for member in self._get_members()}
+
+        for full, disc_id in re.findall(USER_TEMPLATE_PATTERN, message):
+            member = members.get(disc_id)
+            name = member.display_name if member is not None else "Unknown"
+            message = message.replace(full, name)
+
+        return message
+
+    @app_commands.command(description="Show a summary of your Wordle performance.")
+    async def summary(self, interaction: Interaction, member: Member):
+        response_msg = messages.get_player_summary_msg(self.database_client, member.id)
+        await interaction.response.send_message(self._replace_user_ids(response_msg))
+
+    @app_commands.command(description="Show a general overview of Wordle stats in the server.")
+    async def status(self, interaction: Interaction):
+        response_msg = messages.get_status_msg(self.database_client)
+        await interaction.response.send_message(response_msg)
+
+    @app_commands.command(description="Show the ranking of players by average Wordle score.")
+    async def ranking(self, interaction: Interaction):
+        response_msg = messages.get_ranking_msg(self.database_client)
+        await interaction.response.send_message(self._replace_user_ids(response_msg))
+
+    @app_commands.command(description="Show information about a word on a given date, fx. '2026-11-11'")
+    async def word(self, interaction: Interaction, date: str):
+        response_msg = messages.get_word_msg(self.database_client, date)
+        await interaction.response.send_message(self._replace_user_ids(response_msg))

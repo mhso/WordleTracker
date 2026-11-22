@@ -13,3 +13,4 @@ wheels/
 test_data
 *.png
 resources/database
+log

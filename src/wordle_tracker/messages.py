@@ -39,6 +39,19 @@ def get_player_summary_msg(database: DatabaseClient, disc_id: int):
 
     return message
 
+def get_status_msg(database: DatabaseClient):
+    with database as cursor:
+        first_date = cursor.get_first_word_date()
+        days_tracked = cursor.get_days_tracked()
+        best_word, best_day, best_score = cursor.get_lowest_average_score()
+        worst_word, worst_day, worst_score = cursor.get_highest_average_score()
+
+        return (
+            f"Since **{first_date.strftime('%Y-%m-%d')}** we have played Wordle **{days_tracked}** times\n"
+            f"Our lowest average scores was **{best_score}** on {best_day.strftime('%Y-%m-%d')} with the word **{best_word.upper()}**\n"
+            f"Our highest average scores was **{worst_score}** on {worst_day.strftime('%Y-%m-%d')} with the word **{worst_word.upper()}**"
+        )
+
 def get_ranking_msg(database: DatabaseClient):
     message = "Rankings for Wordle:"
 
@@ -49,31 +62,24 @@ def get_ranking_msg(database: DatabaseClient):
 
     return message
 
-def get_word_msg(database: DatabaseClient, word_date: str):
-    word_date = date(*tuple(map(int, word_date.split("-"))))
+def get_word_msg(database: DatabaseClient, date_str: str):
+    try:
+        parsed_date = date(*tuple(map(int, date_str.split("-"))))
+    except ValueError:
+        return "Invalid date. Should be in the format *YYYY-MM-DD*"
 
     with database as cursor:
-        result = cursor.get_word_info(word_date)
+        result = cursor.get_word_info(parsed_date)
         if result is None or result[0] is None:
             return "Can't find the word for that date."
 
         word, fake_reports, average_score = result
 
         message = (
-            f"The word on {word_date.strftime('%Y-%m-%d')} was **{word.upper()}**\n"
+            f"The word on {parsed_date.strftime('%Y-%m-%d')} was **{word.upper()}**\n"
             f"The average score was **{average_score:.2f}**"
         )
         if fake_reports:
             message += f"\nThe word was reported as fake **{fake_reports}** times"
 
         return message
-
-def get_status_msg(database: DatabaseClient):
-    with database as cursor:
-        first_date = cursor.get_first_word_date()
-        days_tracked = cursor.get_days_tracked()
-
-        message = (
-            f"Since **{first_date.strftime('%Y-%m-%d')}** we have played Wordle **{days_tracked}** times\n"
-
-        )
